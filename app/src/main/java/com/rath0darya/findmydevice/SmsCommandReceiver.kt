@@ -48,16 +48,10 @@ class SmsCommandReceiver : BroadcastReceiver() {
             .setPackage(context.packageName)
             .putExtra(EXTRA_REPLY_TO, sender)
 
-        if (SecureStore.isServiceActive(context)) {
-            // The recovery FGS is already alive. Signal it directly instead of trying to
-            // launch a location FGS from this background SMS broadcast.
-            context.sendBroadcast(refresh)
-            SecureStore.setSmsStatus(context, "SMS_COMMAND: sent refresh request to active recovery service")
-            return
-        }
-
-        // If the service was killed, try to restore it. Android 12+ may reject a background
-        // FGS launch here, so the catch path deliberately retains the cached report.
+        // Do not trust a persisted "service active" flag. Android may kill the hosting
+        // process without giving the app a reliable opportunity to clear that flag.
+        // Starting the already-started service is safe, while a dead START_STICKY service
+        // can be recreated and receive the refresh intent through onStartCommand().
         try {
             ContextCompat.startForegroundService(
                 context,
@@ -65,16 +59,20 @@ class SmsCommandReceiver : BroadcastReceiver() {
                     .setAction(RecoveryService.ACTION_REFRESH)
                     .putExtra(EXTRA_REPLY_TO, sender)
             )
-            SecureStore.setSmsStatus(context, "SMS_COMMAND: recovery service restart requested")
+            SecureStore.setSmsStatus(context, "SMS_COMMAND: recovery service refresh requested")
         } catch (e: Exception) {
-            Log.w(TAG, "Recovery service could not be restarted from SMS", e)
-            SecureStore.setSmsStatus(
-                context,
-                "SMS_COMMAND: service unavailable in background (${e.javaClass.simpleName}); cached report retained"
-            )
-            val fallback = try { SecureStore.lastReport(context) } catch (_: Exception) { null }
-                ?: "DEVICE LOCATION\nNo location fix available yet."
-            SmsReplySender.send(context, sender, fallback)
+            Log.w(TAG, "Recovery service could not be started from SMS", e)
+            // If the existing service process is alive, the dynamic receiver remains the
+            // fastest path. Otherwise retain the report rather than claiming the command ran.
+            try {
+                context.sendBroadcast(refresh)
+                SecureStore.setSmsStatus(context, "SMS_COMMAND: service start unavailable; refresh signal sent")
+            } catch (_: Exception) {
+                SecureStore.setSmsStatus(
+                    context,
+                    "SMS_COMMAND: recovery service unavailable (${e.javaClass.simpleName}); cached report retained"
+                )
+            }
         }
     }
 
