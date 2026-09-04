@@ -24,6 +24,7 @@ object SecureStore {
     private const val OWNER = "owner_number"
     private const val SECRET = "command_secret"
     private const val SMS_STATUS = "sms_status"
+    private const val SERVICE_ACTIVE = "service_active"
     private const val PENDING_SMS_REPORT = "pending_sms_report"
     private const val PENDING_SMS_DESTINATION = "pending_sms_destination"
     private const val PENDING_SMS_PART_COUNT = "pending_sms_part_count"
@@ -95,6 +96,12 @@ object SecureStore {
 
     fun smsStatus(context: Context): String? = prefs(context).getString(SMS_STATUS, null)
 
+    fun setServiceActive(context: Context, active: Boolean) =
+        prefs(context).edit().putBoolean(SERVICE_ACTIVE, active).apply()
+
+    fun isServiceActive(context: Context): Boolean =
+        prefs(context).getBoolean(SERVICE_ACTIVE, false)
+
     fun saveReport(context: Context, report: String) {
         val p = prefs(context)
         val encrypted = encrypt(key(), report)
@@ -133,14 +140,9 @@ object SecureStore {
         }
     }
 
-    fun pendingSmsPartCount(context: Context): Int =
-        prefs(context).getInt(PENDING_SMS_PART_COUNT, 0)
-
-    fun pendingSmsSuccessCount(context: Context): Int =
-        prefs(context).getInt(PENDING_SMS_SUCCESS_COUNT, 0)
-
-    fun pendingSmsFailureCount(context: Context): Int =
-        prefs(context).getInt(PENDING_SMS_FAILURE_COUNT, 0)
+    fun pendingSmsPartCount(context: Context): Int = prefs(context).getInt(PENDING_SMS_PART_COUNT, 0)
+    fun pendingSmsSuccessCount(context: Context): Int = prefs(context).getInt(PENDING_SMS_SUCCESS_COUNT, 0)
+    fun pendingSmsFailureCount(context: Context): Int = prefs(context).getInt(PENDING_SMS_FAILURE_COUNT, 0)
 
     fun setPendingSmsPartCount(context: Context, count: Int) =
         prefs(context).edit().putInt(PENDING_SMS_PART_COUNT, count).apply()
