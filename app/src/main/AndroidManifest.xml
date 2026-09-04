@@ -54,13 +54,17 @@
 
         <receiver
             android:name=".SmsSendResultReceiver"
-            android:exported="false" />
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.rath0darya.findmydevice.SMS_SENT" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".SmsRetryReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
-                <action android:name="android.intent.action.SERVICE_STATE" />
+                <action android:name="android.telephony.action.SERVICE_STATE" />
                 <action android:name="android.intent.action.SIM_STATE_CHANGED" />
                 <action android:name="android.telephony.action.DEFAULT_SMS_SUBSCRIPTION_CHANGED" />
                 <action android:name="android.telephony.action.DEFAULT_SUBSCRIPTION_CHANGED" />
