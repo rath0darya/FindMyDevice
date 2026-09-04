@@ -10,17 +10,18 @@ import android.bluetooth.le.BluetoothLeAdvertiser
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
 import java.util.UUID
 
 /**
- * Offline BLE discovery for devices that have opted into the FindMyDevice relay network.
- * Advertisements contain only an opaque target tag and encrypted/opaque payload.
+ * BLE discovery for the opt-in FindMyDevice relay network.
+ * The beacon contains only an opaque target tag. Relay devices record their own
+ * location and the sighting timestamp locally; no target location is broadcast.
  */
 class OfflineBleRelay(private val context: Context) {
     companion object {
@@ -33,21 +34,21 @@ class OfflineBleRelay(private val context: Context) {
     private val scanner: BluetoothLeScanner? get() = adapter?.bluetoothLeScanner
 
     private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            if (!hasBluetoothPermission()) return
+        override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) {
+            if (!hasScanPermission()) return
             val data = result.scanRecord?.getServiceData(ParcelUuid(SERVICE_UUID)) ?: return
-            if (data.size < 9) return
+            if (data.size < 8) return
             val tag = data.copyOfRange(0, 8)
             if (!tag.contentEquals(OfflineRelayStore.targetTag(context))) return
             OfflineRelayStore.add(
                 context,
-                OfflineRelayStore.packet(System.currentTimeMillis(), data.copyOfRange(8, data.size))
+                OfflineRelayStore.packet(System.currentTimeMillis(), tag)
             )
         }
     }
 
     fun startScanning() {
-        if (!hasBluetoothPermission() || scanner == null) return
+        if (!hasScanPermission() || scanner == null) return
         try {
             val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SERVICE_UUID)).build()
             val settings = ScanSettings.Builder()
@@ -58,14 +59,16 @@ class OfflineBleRelay(private val context: Context) {
     }
 
     fun stopScanning() {
-        if (!hasBluetoothPermission()) return
+        if (!hasScanPermission()) return
         try { scanner?.stopScan(scanCallback) } catch (_: SecurityException) { }
     }
 
-    fun advertise(payload: ByteArray) {
-        if (!hasBluetoothPermission() || advertiser == null) return
-        val packet = payload.take(20).toByteArray()
-        val serviceData = OfflineRelayStore.targetTag(context) + packet
+    fun advertise(payload: ByteArray = ByteArray(0)) {
+        if (!hasAdvertisePermission() || advertiser == null) return
+
+        // Keep the legacy BLE advertisement small enough for devices with the
+        // 31-byte legacy advertising limit. The payload is intentionally not broadcast.
+        val serviceData = OfflineRelayStore.targetTag(context)
         try {
             val settings = AdvertiseSettings.Builder()
                 .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
@@ -73,7 +76,6 @@ class OfflineBleRelay(private val context: Context) {
                 .setConnectable(false)
                 .build()
             val data = AdvertiseData.Builder()
-                .addServiceUuid(ParcelUuid(SERVICE_UUID))
                 .addServiceData(ParcelUuid(SERVICE_UUID), serviceData)
                 .setIncludeDeviceName(false)
                 .build()
@@ -82,15 +84,17 @@ class OfflineBleRelay(private val context: Context) {
     }
 
     fun stopAdvertising() {
-        if (!hasBluetoothPermission()) return
+        if (!hasAdvertisePermission()) return
         try { advertiser?.stopAdvertising(advertiseCallback) } catch (_: SecurityException) { }
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {}
 
-    private fun hasBluetoothPermission(): Boolean =
-        if (android.os.Build.VERSION.SDK_INT >= 31) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
-        } else true
+    private fun hasScanPermission(): Boolean =
+        Build.VERSION.SDK_INT < 31 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasAdvertisePermission(): Boolean =
+        Build.VERSION.SDK_INT < 31 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
 }
