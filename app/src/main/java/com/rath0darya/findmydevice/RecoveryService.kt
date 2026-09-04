@@ -33,6 +33,7 @@ class RecoveryService : Service() {
     private val latest = AtomicReference<Location?>(null)
     private val bleCount = AtomicInteger(0)
     private val handler = Handler(Looper.getMainLooper())
+    private var relayEngine: OfflineRelayEngine? = null
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             if (!location.hasAccuracy() || location.accuracy <= 0f) return
@@ -56,12 +57,13 @@ class RecoveryService : Service() {
         locationManager = getSystemService(LocationManager::class.java)
         requestLocation()
         scanNearby()
+        updateRelayEngine()
         persistReport()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH) {
-            requestLocation(); scanNearby(); persistReport()
+            requestLocation(); scanNearby(); updateRelayEngine(); persistReport()
         }
         return START_STICKY
     }
@@ -94,6 +96,17 @@ class RecoveryService : Service() {
             adapter.bluetoothLeScanner?.startScan(bleCallback)
             handler.postDelayed({ try { adapter.bluetoothLeScanner?.stopScan(bleCallback) } catch (_: Exception) {} ; persistReport() }, 8_000L)
         } catch (_: Exception) { }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun updateRelayEngine() {
+        if (!RelaySettings.isEnabled(this)) {
+            relayEngine?.stop()
+            relayEngine = null
+            return
+        }
+        if (relayEngine == null) relayEngine = OfflineRelayEngine(this)
+        relayEngine?.start()
     }
 
     private fun hasLocationPermission() =
@@ -130,6 +143,7 @@ class RecoveryService : Service() {
             appendLine("Internet: ${if (hasInternet()) "AVAILABLE" else "OFFLINE"}")
             appendLine("Wi-Fi: ${if (isWifiConnected()) "CONNECTED" else "NOT CONNECTED"}")
             appendLine("SIM: ${if (simPresent()) "DETECTED" else "NOT DETECTED"}")
+            appendLine("Relay: ${if (RelaySettings.isEnabled(this@RecoveryService)) "OPTED IN" else "OFF"}")
             appendLine("Map: $map")
             appendLine("Status: ${if (score >= 75) "LOCATION VERIFIED" else "LOCATION ESTIMATED"}")
         }
@@ -180,6 +194,6 @@ class RecoveryService : Service() {
 
     private fun createChannel() { if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Device recovery", NotificationManager.IMPORTANCE_LOW)) }
     private fun notification() = NotificationCompat.Builder(this, CHANNEL).setContentTitle("Find My Device").setContentText("Recovery engine active").setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build()
-    override fun onDestroy() { try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
+    override fun onDestroy() { try { relayEngine?.stop() } catch (_: Exception) {}; try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }
