@@ -71,9 +71,9 @@ class RecoveryService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        SecureStore.setServiceActive(this, true)
         createChannel()
         startForeground(NOTIFICATION_ID, notification())
+        SecureStore.setServiceActive(this, true)
         locationManager = getSystemService(LocationManager::class.java)
         ContextCompat.registerReceiver(
             this,
