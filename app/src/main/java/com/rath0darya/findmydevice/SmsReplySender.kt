@@ -26,6 +26,7 @@ object SmsReplySender {
         val success = SecureStore.pendingSmsSuccessCount(context)
         val failures = SecureStore.pendingSmsFailureCount(context)
 
+        // Never duplicate a multipart report when some parts were already accepted.
         if (success > 0 || (partCount > 0 && failures in 1 until partCount)) return
         if (pending.second.isBlank()) return
         attemptPending(context)
@@ -59,14 +60,16 @@ object SmsReplySender {
 
             val sentIntents = ArrayList<PendingIntent>(parts.size)
             parts.indices.forEach { index ->
+                val sentIntent = Intent(context, SmsSendResultReceiver::class.java)
+                    .setAction(ACTION_SMS_SENT)
+                    .putExtra("part_index", index)
+                    .putExtra("part_count", parts.size)
+                    .putExtra("subscription_id", subscriptionId)
+
                 sentIntents += PendingIntent.getBroadcast(
                     context,
                     REQUEST_BASE + index,
-                    Intent(ACTION_SMS_SENT)
-                        .setPackage(context.packageName)
-                        .putExtra("part_index", index)
-                        .putExtra("part_count", parts.size)
-                        .putExtra("subscription_id", subscriptionId),
+                    sentIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
                 )
             }
