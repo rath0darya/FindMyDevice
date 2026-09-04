@@ -11,7 +11,6 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
-import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -32,7 +31,8 @@ class OfflineRelayEngine(private val context: Context) {
             val service = result.scanRecord?.getServiceData(android.os.ParcelUuid(SERVICE_UUID)) ?: return
             if (service.size < 8) return
             val location = lastLocation() ?: return
-            val packet = encodeSighting(service.copyOfRange(0, 8), location, result.rssi)
+            val payload = encodeSighting(service.copyOfRange(0, 8), location, result.rssi)
+            val packet = OfflineRelayStore.packet(System.currentTimeMillis(), payload)
             OfflineRelayStore.add(context, packet)
         }
     }
@@ -41,7 +41,8 @@ class OfflineRelayEngine(private val context: Context) {
     fun start() {
         if (Build.VERSION.SDK_INT >= 31 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
-        val scanner = context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.bluetoothLeScanner ?: return
+        val scanner = context.getSystemService(android.bluetooth.BluetoothManager::class.java)
+            ?.adapter?.bluetoothLeScanner ?: return
         try {
             val filter = ScanFilter.Builder().setServiceUuid(android.os.ParcelUuid(SERVICE_UUID)).build()
             scanner.startScan(
@@ -57,7 +58,8 @@ class OfflineRelayEngine(private val context: Context) {
         if (Build.VERSION.SDK_INT >= 31 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
         try {
-            context.getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.bluetoothLeScanner?.stopScan(callback)
+            context.getSystemService(android.bluetooth.BluetoothManager::class.java)
+                ?.adapter?.bluetoothLeScanner?.stopScan(callback)
         } catch (_: SecurityException) { }
     }
 
@@ -75,13 +77,12 @@ class OfflineRelayEngine(private val context: Context) {
 
     private fun encodeSighting(tag: ByteArray, location: Location, rssi: Int): ByteArray {
         val safeTag = tag.copyOf(8)
-        return ByteBuffer.allocate(8 + 8 + 8 + 4 + 4 + 8)
+        return ByteBuffer.allocate(8 + 8 + 8 + 4 + 4)
             .put(safeTag)
             .putDouble(location.latitude)
             .putDouble(location.longitude)
             .putFloat(location.accuracy)
             .putInt(rssi)
-            .putLong(System.currentTimeMillis())
             .array()
     }
 }
