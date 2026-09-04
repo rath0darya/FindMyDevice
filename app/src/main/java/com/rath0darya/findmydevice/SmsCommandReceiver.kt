@@ -38,7 +38,7 @@ class SmsCommandReceiver : BroadcastReceiver() {
         }
 
         val secret = SecureStore.commandSecret(context)
-        if (!body.equals("FMD LOCATE $secret", ignoreCase = true)) {
+        if (body != "FMD LOCATE $secret") {
             SecureStore.setSmsStatus(context, "SMS_REJECTED: command secret mismatch")
             return
         }
