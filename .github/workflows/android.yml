@@ -3,11 +3,13 @@ name: Android Build
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'Downloads/**'
   pull_request:
     branches: [ main ]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -35,17 +37,22 @@ jobs:
           test -s app/build/outputs/apk/debug/app-debug.apk
           file app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Prepare Downloads folder
+      - name: Update repository Downloads folder
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          rm -rf Downloads
           mkdir -p Downloads
           cp app/build/outputs/apk/debug/app-debug.apk Downloads/FindMyDevice-debug.apk
           test -s Downloads/FindMyDevice-debug.apk
 
-      - name: Publish debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FindMyDevice-Downloads
-          path: Downloads/
-          if-no-files-found: error
-          retention-days: 14
+      - name: Commit APK to repository
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Downloads/FindMyDevice-debug.apk
+          if git diff --cached --quiet; then
+            echo 'APK is already up to date.'
+          else
+            git commit -m 'ci: update downloadable APK'
+            git push
+          fi
