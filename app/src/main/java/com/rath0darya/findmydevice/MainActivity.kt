@@ -18,6 +18,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var ownerInput: EditText
     private lateinit var status: TextView
     private lateinit var last: TextView
+    private lateinit var smsStatus: TextView
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
         val secretView = TextView(this)
         status = TextView(this).apply { textSize = 14f }
         last = TextView(this)
+        smsStatus = TextView(this).apply { textSize = 12f }
 
         layout.addView(title)
         layout.addView(ownerInput)
@@ -81,11 +83,13 @@ class MainActivity : ComponentActivity() {
         layout.addView(secretView)
         layout.addView(status)
         layout.addView(last)
+        layout.addView(smsStatus)
         setContentView(layout)
 
         ownerInput.setText(SecureStore.owner(this) ?: "")
         secretView.text = "Command secret: ${SecureStore.commandSecret(this)}\nKeep this secret."
         last.text = safeLastReport()
+        smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
         status.text = "Grant permissions, save the control number, then keep recovery enabled."
 
         save.setOnClickListener {
@@ -97,6 +101,13 @@ class MainActivity : ComponentActivity() {
                 return@setOnClickListener
             }
             startRecovery()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::smsStatus.isInitialized) {
+            smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
         }
     }
 
@@ -116,6 +127,7 @@ class MainActivity : ComponentActivity() {
             status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
         }
         last.text = safeLastReport()
+        smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
     }
 
     private fun requiredRuntimePermissionsGranted(grants: Map<String, Boolean>): Boolean {
