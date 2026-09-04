@@ -3,10 +3,12 @@ package com.rath0darya.findmydevice
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -34,29 +36,23 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants ->
-        if (requiredRuntimePermissionsGranted(grants)) {
-            startRecovery()
-        } else {
-            status.text = "Recovery not started because required permissions were not granted."
-        }
+    ) {
+        startRecovery()
     }
 
-    private val permissions: Array<String>
-        get() = buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            add(Manifest.permission.READ_PHONE_STATE)
-            add(Manifest.permission.RECEIVE_SMS)
-            add(Manifest.permission.SEND_SMS)
-            if (Build.VERSION.SDK_INT >= 31) {
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-                add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            }
-            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-        }.toTypedArray()
+    private fun requestedPermissions(): Array<String> = buildList {
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        add(Manifest.permission.READ_PHONE_STATE)
+        add(Manifest.permission.RECEIVE_SMS)
+        add(Manifest.permission.SEND_SMS)
+        if (Build.VERSION.SDK_INT >= 31 && RelaySettings.isEnabled(this@MainActivity)) {
+            add(Manifest.permission.BLUETOOTH_SCAN)
+            add(Manifest.permission.BLUETOOTH_CONNECT)
+            add(Manifest.permission.BLUETOOTH_ADVERTISE)
+        }
+        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+    }.toTypedArray()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +78,7 @@ class MainActivity : ComponentActivity() {
             textSize = 12f
         }
         val save = Button(this).apply { text = "Save & Start Recovery" }
+        val backgroundLocation = Button(this).apply { text = "Enable Background Location" }
         val secretView = TextView(this)
         status = TextView(this).apply { textSize = 14f }
         last = TextView(this)
@@ -92,6 +89,7 @@ class MainActivity : ComponentActivity() {
         layout.addView(relayOptIn)
         layout.addView(relayInfo)
         layout.addView(save)
+        if (Build.VERSION.SDK_INT >= 29) layout.addView(backgroundLocation)
         layout.addView(secretView)
         layout.addView(status)
         layout.addView(last)
@@ -102,17 +100,32 @@ class MainActivity : ComponentActivity() {
         secretView.text = "Command secret: ${SecureStore.commandSecret(this)}\nKeep this secret."
         last.text = safeLastReport()
         smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
-        status.text = "Grant permissions, save the control number, then keep recovery enabled."
+        updateStatus()
 
         save.setOnClickListener {
             SecureStore.setOwner(this, ownerInput.text.toString())
             RelaySettings.setEnabled(this, relayOptIn.isChecked)
-            if (!allPermissionsGranted()) {
-                status.text = "Permission approval is required before recovery can start."
-                permissionLauncher.launch(permissions)
+            if (!foregroundLocationGranted()) {
+                status.text = "Foreground location permission is required for recovery."
+                permissionLauncher.launch(requestedPermissions())
                 return@setOnClickListener
             }
             startRecovery()
+        }
+
+        backgroundLocation.setOnClickListener {
+            if (Build.VERSION.SDK_INT >= 29) {
+                try {
+                    startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:$packageName")
+                        }
+                    )
+                    status.text = "In App permissions, set Location to Allow all the time."
+                } catch (_: Exception) {
+                    startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                }
+            }
         }
     }
 
@@ -120,6 +133,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         uiHandler.removeCallbacks(refreshUi)
         uiHandler.post(refreshUi)
+        if (::status.isInitialized) updateStatus()
     }
 
     override fun onPause() {
@@ -128,17 +142,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startRecovery() {
-        if (!allPermissionsGranted()) {
-            status.text = "Recovery not started because required permissions are missing."
+        if (!foregroundLocationGranted()) {
+            status.text = "Recovery not started because foreground location permission is missing."
             return
         }
+        SecureStore.setServiceActive(this, false)
         try {
             ContextCompat.startForegroundService(this, Intent(this, RecoveryService::class.java))
-            status.text = if (RelaySettings.isEnabled(this)) {
-                "Recovery engine started. Nearby relay participation is enabled."
-            } else {
-                "Recovery engine started. Nearby relay participation is disabled."
-            }
+            updateStatus("Recovery engine started.")
         } catch (e: Exception) {
             status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
         }
@@ -146,15 +157,22 @@ class MainActivity : ComponentActivity() {
         smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
     }
 
-    private fun requiredRuntimePermissionsGranted(grants: Map<String, Boolean>): Boolean {
-        return permissions.all { permission ->
-            grants[permission] == true ||
-                ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-        }
-    }
+    private fun foregroundLocationGranted(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-    private fun allPermissionsGranted(): Boolean = permissions.all {
-        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    private fun backgroundLocationGranted(): Boolean =
+        Build.VERSION.SDK_INT < 29 ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun updateStatus(prefix: String? = null) {
+        val base = prefix ?: "Recovery configuration"
+        val background = if (backgroundLocationGranted()) "background location: READY" else "background location: NOT ENABLED"
+        val sms = if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED) {
+            "SMS: READY"
+        } else "SMS: NOT READY"
+        status.text = "$base\n$background\n$sms"
     }
 
     private fun safeLastReport(): String = try {
