@@ -3,6 +3,7 @@ package com.rath0darya.findmydevice
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -27,8 +28,9 @@ class MainActivity : ComponentActivity() {
     private val refreshUi = object : Runnable {
         override fun run() {
             if (::smsStatus.isInitialized) {
-                smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this@MainActivity) ?: "No SMS command processed yet."}"
+                smsStatus.text = "Diagnostics: ${SecureStore.smsStatus(this@MainActivity) ?: "No command/location activity yet."}"
                 last.text = safeLastReport()
+                updateStatus()
             }
             uiHandler.postDelayed(this, 1_000L)
         }
@@ -78,7 +80,9 @@ class MainActivity : ComponentActivity() {
             textSize = 12f
         }
         val save = Button(this).apply { text = "Save & Start Recovery" }
+        val testLocation = Button(this).apply { text = "Test Location Now" }
         val backgroundLocation = Button(this).apply { text = "Enable Background Location" }
+        val locationSettings = Button(this).apply { text = "Open Location Settings" }
         val secretView = TextView(this)
         status = TextView(this).apply { textSize = 14f }
         last = TextView(this)
@@ -89,7 +93,9 @@ class MainActivity : ComponentActivity() {
         layout.addView(relayOptIn)
         layout.addView(relayInfo)
         layout.addView(save)
+        layout.addView(testLocation)
         if (Build.VERSION.SDK_INT >= 29) layout.addView(backgroundLocation)
+        layout.addView(locationSettings)
         layout.addView(secretView)
         layout.addView(status)
         layout.addView(last)
@@ -99,7 +105,7 @@ class MainActivity : ComponentActivity() {
         ownerInput.setText(SecureStore.owner(this) ?: "")
         secretView.text = "Command secret: ${SecureStore.commandSecret(this)}\nKeep this secret."
         last.text = safeLastReport()
-        smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
+        smsStatus.text = "Diagnostics: ${SecureStore.smsStatus(this) ?: "No command/location activity yet."}"
         updateStatus()
 
         save.setOnClickListener {
@@ -111,6 +117,22 @@ class MainActivity : ComponentActivity() {
                 return@setOnClickListener
             }
             startRecovery()
+        }
+
+        testLocation.setOnClickListener {
+            if (!foregroundLocationGranted()) {
+                permissionLauncher.launch(requestedPermissions())
+                return@setOnClickListener
+            }
+            try {
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, RecoveryService::class.java).setAction(RecoveryService.ACTION_REFRESH)
+                )
+                status.text = "Location test started. Waiting up to 30 seconds for Fused/GNSS/network fix."
+            } catch (e: Exception) {
+                status.text = "Location test could not start: ${e.javaClass.simpleName}"
+            }
         }
 
         backgroundLocation.setOnClickListener {
@@ -126,6 +148,10 @@ class MainActivity : ComponentActivity() {
                     startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
                 }
             }
+        }
+
+        locationSettings.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
         }
     }
 
@@ -153,7 +179,7 @@ class MainActivity : ComponentActivity() {
             status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
         }
         last.text = safeLastReport()
-        smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
+        smsStatus.text = "Diagnostics: ${SecureStore.smsStatus(this) ?: "No command/location activity yet."}"
     }
 
     private fun foregroundLocationGranted(): Boolean =
@@ -164,14 +190,25 @@ class MainActivity : ComponentActivity() {
         Build.VERSION.SDK_INT < 29 ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    private fun locationServicesEnabled(): Boolean = try {
+        val manager = getSystemService(LocationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 28) manager.isLocationEnabled
+        else manager.isProviderEnabled(LocationManager.GPS_PROVIDER) || manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    } catch (_: Exception) {
+        false
+    }
+
     private fun updateStatus(prefix: String? = null) {
+        if (!::status.isInitialized) return
         val base = prefix ?: "Recovery configuration"
+        val permission = if (foregroundLocationGranted()) "location permission: READY" else "location permission: NOT GRANTED"
+        val services = if (locationServicesEnabled()) "Location Services: ON" else "Location Services: OFF"
         val background = if (backgroundLocationGranted()) "background location: READY" else "background location: NOT ENABLED"
         val sms = if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED) {
             "SMS: READY"
         } else "SMS: NOT READY"
-        status.text = "$base\n$background\n$sms"
+        status.text = "$base\n$permission\n$services\n$background\n$sms"
     }
 
     private fun safeLastReport(): String = try {
