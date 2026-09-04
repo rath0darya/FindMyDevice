@@ -26,6 +26,8 @@ object SecureStore {
     private const val SMS_STATUS = "sms_status"
     private const val KEY_ALIAS = "recovery_report_aes"
     private const val IV_SIZE = 12
+    private const val COMMAND_SECRET_LENGTH = 32
+    private const val COMMAND_SECRET_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
     private fun prefs(context: Context) = context.createDeviceProtectedStorageContext()
         .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -56,10 +58,19 @@ object SecureStore {
 
     fun commandSecret(context: Context): String {
         val p = prefs(context)
-        p.getString(SECRET, null)?.let { return it }
-        val bytes = ByteArray(32)
-        SecureRandom().nextBytes(bytes)
-        val value = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        val existing = p.getString(SECRET, null)
+        if (existing != null && existing.length == COMMAND_SECRET_LENGTH &&
+            existing.all { it in COMMAND_SECRET_ALPHABET }
+        ) {
+            return existing
+        }
+
+        val value = buildString(COMMAND_SECRET_LENGTH) {
+            val random = SecureRandom()
+            repeat(COMMAND_SECRET_LENGTH) {
+                append(COMMAND_SECRET_ALPHABET[random.nextInt(COMMAND_SECRET_ALPHABET.length)])
+            }
+        }
         p.edit().putString(SECRET, value).apply()
         return value
     }
