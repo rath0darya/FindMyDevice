@@ -14,8 +14,8 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Device-protected storage for recovery settings and the last report.
- * Long-term report encryption keys are kept in Android Keystore.
+ * Device-protected storage for recovery settings, reports, and pending SMS replies.
+ * Long-term encryption keys are kept in Android Keystore.
  */
 object SecureStore {
     private const val PREFS = "recovery_secure"
@@ -24,6 +24,11 @@ object SecureStore {
     private const val OWNER = "owner_number"
     private const val SECRET = "command_secret"
     private const val SMS_STATUS = "sms_status"
+    private const val PENDING_SMS_REPORT = "pending_sms_report"
+    private const val PENDING_SMS_DESTINATION = "pending_sms_destination"
+    private const val PENDING_SMS_PART_COUNT = "pending_sms_part_count"
+    private const val PENDING_SMS_SUCCESS_COUNT = "pending_sms_success_count"
+    private const val PENDING_SMS_FAILURE_COUNT = "pending_sms_failure_count"
     private const val KEY_ALIAS = "recovery_report_aes"
     private const val IV_SIZE = 12
     private const val COMMAND_SECRET_LENGTH = 32
@@ -59,20 +64,14 @@ object SecureStore {
     fun commandSecret(context: Context): String {
         val p = prefs(context)
         val existing = p.getString(SECRET, null)
-        if (existing != null && isValidCommandSecret(existing)) {
-            return existing
-        }
+        if (existing != null && isValidCommandSecret(existing)) return existing
 
         val random = SecureRandom()
         val chars = CharArray(COMMAND_SECRET_LENGTH) {
             COMMAND_SECRET_ALPHABET[random.nextInt(COMMAND_SECRET_ALPHABET.length)]
         }
-
-        // Guarantee that every generated secret contains both letters and numbers.
         chars[0] = ('A'.code + random.nextInt(26)).toChar()
         chars[1] = ('0'.code + random.nextInt(10)).toChar()
-
-        // Shuffle so the guaranteed character positions are not predictable.
         for (index in chars.lastIndex downTo 1) {
             val swapIndex = random.nextInt(index + 1)
             val temp = chars[index]
@@ -111,6 +110,63 @@ object SecureStore {
             migrateLegacyReport(context, encoded)
         }
     }
+
+    fun savePendingSms(context: Context, destination: String, report: String) {
+        val p = prefs(context)
+        p.edit()
+            .putString(PENDING_SMS_DESTINATION, encrypt(key(), destination))
+            .putString(PENDING_SMS_REPORT, encrypt(key(), report))
+            .putInt(PENDING_SMS_PART_COUNT, 0)
+            .putInt(PENDING_SMS_SUCCESS_COUNT, 0)
+            .putInt(PENDING_SMS_FAILURE_COUNT, 0)
+            .apply()
+    }
+
+    fun pendingSms(context: Context): Pair<String, String>? {
+        val p = prefs(context)
+        val destination = p.getString(PENDING_SMS_DESTINATION, null) ?: return null
+        val report = p.getString(PENDING_SMS_REPORT, null) ?: return null
+        return try {
+            decrypt(key(), destination) to decrypt(key(), report)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun pendingSmsPartCount(context: Context): Int =
+        prefs(context).getInt(PENDING_SMS_PART_COUNT, 0)
+
+    fun pendingSmsSuccessCount(context: Context): Int =
+        prefs(context).getInt(PENDING_SMS_SUCCESS_COUNT, 0)
+
+    fun pendingSmsFailureCount(context: Context): Int =
+        prefs(context).getInt(PENDING_SMS_FAILURE_COUNT, 0)
+
+    fun setPendingSmsPartCount(context: Context, count: Int) =
+        prefs(context).edit().putInt(PENDING_SMS_PART_COUNT, count).apply()
+
+    fun incrementPendingSmsSuccess(context: Context): Int {
+        val p = prefs(context)
+        val value = p.getInt(PENDING_SMS_SUCCESS_COUNT, 0) + 1
+        p.edit().putInt(PENDING_SMS_SUCCESS_COUNT, value).apply()
+        return value
+    }
+
+    fun incrementPendingSmsFailure(context: Context): Int {
+        val p = prefs(context)
+        val value = p.getInt(PENDING_SMS_FAILURE_COUNT, 0) + 1
+        p.edit().putInt(PENDING_SMS_FAILURE_COUNT, value).apply()
+        return value
+    }
+
+    fun clearPendingSms(context: Context) =
+        prefs(context).edit()
+            .remove(PENDING_SMS_DESTINATION)
+            .remove(PENDING_SMS_REPORT)
+            .remove(PENDING_SMS_PART_COUNT)
+            .remove(PENDING_SMS_SUCCESS_COUNT)
+            .remove(PENDING_SMS_FAILURE_COUNT)
+            .apply()
 
     private fun migrateLegacyReport(context: Context, encoded: String): String? {
         val p = prefs(context)
