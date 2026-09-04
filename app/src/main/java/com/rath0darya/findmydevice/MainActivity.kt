@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -39,12 +40,22 @@ class MainActivity : ComponentActivity() {
         }
         val title = TextView(this).apply { text = "Find My Device\nOffline Recovery"; textSize = 24f }
         ownerInput = EditText(this).apply { hint = "Your control phone number"; inputType = 3 }
+        val relayOptIn = CheckBox(this).apply {
+            text = "Participate in Nearby Relay"
+            isChecked = RelaySettings.isEnabled(this@MainActivity)
+        }
+        val relayInfo = TextView(this).apply {
+            text = "When enabled, this phone may record sightings of FindMyDevice recovery beacons and cache the relay phone's own location."
+            textSize = 12f
+        }
         val save = Button(this).apply { text = "Save & Start Recovery" }
         val secretView = TextView(this)
         status = TextView(this).apply { textSize = 14f }
         val last = TextView(this)
         layout.addView(title)
         layout.addView(ownerInput)
+        layout.addView(relayOptIn)
+        layout.addView(relayInfo)
         layout.addView(save)
         layout.addView(secretView)
         layout.addView(status)
@@ -61,9 +72,14 @@ class MainActivity : ComponentActivity() {
                 ActivityCompat.requestPermissions(this, permissions, 42)
             }
             SecureStore.setOwner(this, ownerInput.text.toString())
+            RelaySettings.setEnabled(this, relayOptIn.isChecked)
             try {
                 ContextCompat.startForegroundService(this, Intent(this, RecoveryService::class.java))
-                status.text = "Recovery engine started. Reboot persistence is enabled where Android permits it."
+                status.text = if (relayOptIn.isChecked) {
+                    "Recovery engine started. Nearby relay participation is enabled."
+                } else {
+                    "Recovery engine started. Nearby relay participation is disabled."
+                }
             } catch (e: Exception) {
                 status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
             }
