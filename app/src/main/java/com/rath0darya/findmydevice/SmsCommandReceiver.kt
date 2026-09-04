@@ -16,22 +16,40 @@ import androidx.core.content.ContextCompat
 class SmsCommandReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "FindMyDeviceSMS"
-        private const val ACTION_SMS_SENT = "com.rath0darya.findmydevice.SMS_SENT"
+        const val ACTION_SMS_SENT = "com.rath0darya.findmydevice.SMS_SENT"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
 
+        SecureStore.setSmsStatus(context, "SMS_RECEIVED: broadcast delivered to app")
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-        if (messages.isEmpty()) return
+        if (messages.isEmpty()) {
+            SecureStore.setSmsStatus(context, "SMS_RECEIVED: no message parts")
+            return
+        }
 
-        val sender = messages.first().originatingAddress ?: return
+        val sender = messages.first().originatingAddress ?: run {
+            SecureStore.setSmsStatus(context, "SMS_RECEIVED: sender address unavailable")
+            return
+        }
         val body = messages.joinToString("") { it.messageBody ?: "" }.trim()
-        val owner = SecureStore.owner(context) ?: return
-        if (!sameNumber(sender, owner)) return
+        val owner = SecureStore.owner(context) ?: run {
+            SecureStore.setSmsStatus(context, "SMS_REJECTED: no control number configured")
+            return
+        }
+        if (!sameNumber(sender, owner)) {
+            SecureStore.setSmsStatus(context, "SMS_REJECTED: sender does not match control number")
+            return
+        }
 
         val secret = SecureStore.commandSecret(context)
-        if (!body.equals("FMD LOCATE $secret", ignoreCase = true)) return
+        if (!body.equals("FMD LOCATE $secret", ignoreCase = true)) {
+            SecureStore.setSmsStatus(context, "SMS_REJECTED: command secret mismatch")
+            return
+        }
+
+        SecureStore.setSmsStatus(context, "SMS_COMMAND: valid LOCATE command received")
 
         try {
             ContextCompat.startForegroundService(
@@ -41,6 +59,7 @@ class SmsCommandReceiver : BroadcastReceiver() {
             )
         } catch (e: Exception) {
             Log.w(TAG, "Recovery refresh could not be started", e)
+            SecureStore.setSmsStatus(context, "SMS_COMMAND: valid; refresh service failed: ${e.javaClass.simpleName}")
         }
 
         val report = try {
@@ -55,28 +74,42 @@ class SmsCommandReceiver : BroadcastReceiver() {
 
     private fun sendReply(context: Context, destination: String, message: String) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
+            SecureStore.setSmsStatus(context, "SMS_REPLY: SEND_SMS permission is NOT granted")
             Log.w(TAG, "SEND_SMS permission is not granted")
             return
         }
 
         try {
             val smsManager = selectSmsManager(context) ?: run {
+                SecureStore.setSmsStatus(context, "SMS_REPLY: no active SMS subscription")
                 Log.w(TAG, "No active SMS subscription is available")
                 return
             }
 
             val parts = smsManager.divideMessage(message.take(1400))
-            if (parts.isEmpty()) return
-
-            val sentIntent = PendingIntent.getBroadcast(
-                context,
-                1001,
-                Intent(ACTION_SMS_SENT).setPackage(context.packageName),
-                PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
-            )
-            val sentIntents = ArrayList<PendingIntent>(parts.size).apply {
-                repeat(parts.size) { add(sentIntent) }
+            if (parts.isEmpty()) {
+                SecureStore.setSmsStatus(context, "SMS_REPLY: generated message has no parts")
+                return
             }
+
+            val sentIntents = ArrayList<PendingIntent>(parts.size)
+            parts.indices.forEach { index ->
+                val sentIntent = PendingIntent.getBroadcast(
+                    context,
+                    2000 + index,
+                    Intent(ACTION_SMS_SENT)
+                        .setPackage(context.packageName)
+                        .putExtra("part_index", index)
+                        .putExtra("part_count", parts.size),
+                    PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
+                )
+                sentIntents.add(sentIntent)
+            }
+
+            SecureStore.setSmsStatus(
+                context,
+                "SMS_REPLY: submitting ${parts.size} part(s) via subscription ${subscriptionIdOf(smsManager)}"
+            )
 
             smsManager.sendMultipartTextMessage(
                 destination,
@@ -87,6 +120,7 @@ class SmsCommandReceiver : BroadcastReceiver() {
             )
             Log.i(TAG, "Recovery SMS reply submitted to $destination in ${parts.size} part(s)")
         } catch (e: Exception) {
+            SecureStore.setSmsStatus(context, "SMS_REPLY: submit threw ${e.javaClass.simpleName}: ${e.message ?: "no message"}")
             Log.e(TAG, "Failed to submit recovery SMS reply", e)
         }
     }
@@ -117,6 +151,12 @@ class SmsCommandReceiver : BroadcastReceiver() {
 
         @Suppress("DEPRECATION")
         return SmsManager.getDefault()
+    }
+
+    private fun subscriptionIdOf(manager: SmsManager): Int = try {
+        if (Build.VERSION.SDK_INT >= 31) manager.subscriptionId else -1
+    } catch (_: Exception) {
+        -1
     }
 
     private fun pendingIntentImmutableFlag(): Int =
