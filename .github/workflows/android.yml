@@ -6,27 +6,42 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
+
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
+
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
+
+      - name: Verify APK
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          file app/build/outputs/apk/debug/app-debug.apk
+
       - name: Prepare Downloads folder
         run: |
+          rm -rf Downloads
           mkdir -p Downloads
           cp app/build/outputs/apk/debug/app-debug.apk Downloads/FindMyDevice-debug.apk
+          test -s Downloads/FindMyDevice-debug.apk
+
       - name: Publish debug APK
         uses: actions/upload-artifact@v4
         with:
