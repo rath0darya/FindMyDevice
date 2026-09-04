@@ -23,6 +23,7 @@ object SecureStore {
     private const val LAST_REPORT = "last_report"
     private const val OWNER = "owner_number"
     private const val SECRET = "command_secret"
+    private const val SMS_STATUS = "sms_status"
     private const val KEY_ALIAS = "recovery_report_aes"
     private const val IV_SIZE = 12
 
@@ -62,6 +63,11 @@ object SecureStore {
         p.edit().putString(SECRET, value).apply()
         return value
     }
+
+    fun setSmsStatus(context: Context, status: String) =
+        prefs(context).edit().putString(SMS_STATUS, status.take(1000)).apply()
+
+    fun smsStatus(context: Context): String? = prefs(context).getString(SMS_STATUS, null)
 
     fun saveReport(context: Context, report: String) {
         val p = prefs(context)
