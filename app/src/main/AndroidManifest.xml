@@ -52,6 +52,10 @@
             </intent-filter>
         </receiver>
 
+        <receiver
+            android:name=".SmsSendResultReceiver"
+            android:exported="false" />
+
         <service
             android:name=".RecoveryService"
             android:exported="false"
