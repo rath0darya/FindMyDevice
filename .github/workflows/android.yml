@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: android-build-main
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -54,5 +58,5 @@ jobs:
             echo 'APK is already up to date.'
           else
             git commit -m 'ci: update downloadable APK'
-            git push
+            git push origin HEAD:main
           fi
