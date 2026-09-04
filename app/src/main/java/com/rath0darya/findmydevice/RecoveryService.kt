@@ -14,6 +14,7 @@ import android.net.wifi.WifiManager
 import android.os.*
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.atomic.AtomicInteger
@@ -24,6 +25,7 @@ import kotlin.math.max
 class RecoveryService : Service() {
     companion object {
         const val ACTION_REFRESH = "com.rath0darya.findmydevice.REFRESH"
+        const val ACTION_REFRESH_SIGNAL = "com.rath0darya.findmydevice.REFRESH_SIGNAL"
         private const val CHANNEL = "recovery"
         private const val NOTIFICATION_ID = 1001
         private const val MIN_TIME_MS = 30_000L
@@ -39,6 +41,13 @@ class RecoveryService : Service() {
     private var pendingReplyTo: String? = null
     private var pendingReplyStartedAt = 0L
     private val replyTimeout = Runnable { finishPendingReplyWithCachedLocation() }
+
+    private val refreshReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_REFRESH_SIGNAL) return
+            handleRefresh(intent)
+        }
+    }
 
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
@@ -61,9 +70,16 @@ class RecoveryService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        SecureStore.setServiceActive(this, true)
         createChannel()
         startForeground(NOTIFICATION_ID, notification())
         locationManager = getSystemService(LocationManager::class.java)
+        ContextCompat.registerReceiver(
+            this,
+            refreshReceiver,
+            IntentFilter(ACTION_REFRESH_SIGNAL),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         requestLocation()
         scanNearby()
         updateRelayEngine()
@@ -71,17 +87,19 @@ class RecoveryService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_REFRESH) {
-            pendingReplyTo = intent.getStringExtra(SmsCommandReceiver.EXTRA_REPLY_TO)
-            pendingReplyStartedAt = System.currentTimeMillis()
-            handler.removeCallbacks(replyTimeout)
-            SecureStore.setSmsStatus(this, "SMS_COMMAND: acquiring fresh location")
-            requestFreshLocation()
-            scanNearby()
-            updateRelayEngine()
-            handler.postDelayed(replyTimeout, FRESH_LOCATION_TIMEOUT_MS)
-        }
+        if (intent?.action == ACTION_REFRESH) handleRefresh(intent)
         return START_STICKY
+    }
+
+    private fun handleRefresh(intent: Intent) {
+        pendingReplyTo = intent.getStringExtra(SmsCommandReceiver.EXTRA_REPLY_TO)
+        pendingReplyStartedAt = System.currentTimeMillis()
+        handler.removeCallbacks(replyTimeout)
+        SecureStore.setSmsStatus(this, "SMS_COMMAND: valid command accepted; acquiring fresh location")
+        requestFreshLocation()
+        scanNearby()
+        updateRelayEngine()
+        handler.postDelayed(replyTimeout, FRESH_LOCATION_TIMEOUT_MS)
     }
 
     @SuppressLint("MissingPermission")
@@ -105,22 +123,24 @@ class RecoveryService : Service() {
     @SuppressLint("MissingPermission")
     private fun requestFreshLocation() {
         if (!hasLocationPermission()) {
-            SecureStore.setSmsStatus(this, "SMS_LOCATION: location permission is NOT granted")
+            SecureStore.setSmsStatus(this, "SMS_LOCATION: foreground location permission is NOT granted")
+            finishPendingReplyWithCachedLocation()
+            return
+        }
+
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { try { locationManager.isProviderEnabled(it) } catch (_: Exception) { false } }
+        if (providers.isEmpty()) {
+            SecureStore.setSmsStatus(this, "SMS_LOCATION: no enabled location provider")
             finishPendingReplyWithCachedLocation()
             return
         }
 
         if (Build.VERSION.SDK_INT >= 30) {
-            val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-                .filter { try { locationManager.isProviderEnabled(it) } catch (_: Exception) { false } }
-            if (providers.isEmpty()) {
-                SecureStore.setSmsStatus(this, "SMS_LOCATION: no enabled location provider")
-                finishPendingReplyWithCachedLocation()
-                return
-            }
             requestCurrentProvider(providers, 0)
         } else {
             requestLocation()
+            handler.postDelayed({ if (pendingReplyTo != null) finishPendingReplyWithCachedLocation() }, 5_000L)
         }
     }
 
@@ -151,9 +171,10 @@ class RecoveryService : Service() {
         val destination = pendingReplyTo ?: return
         pendingReplyTo = null
         handler.removeCallbacks(replyTimeout)
-        SecureStore.saveReport(this, buildReport(location))
-        SecureStore.setSmsStatus(this, "SMS_REPLY: fresh location acquired; sending reply")
-        SmsReplySender.send(this, destination, buildReport(location))
+        val report = buildReport(location)
+        SecureStore.saveReport(this, report)
+        SecureStore.setSmsStatus(this, "SMS_REPLY: fresh location acquired; queuing complete report")
+        SmsReplySender.send(this, destination, report)
     }
 
     private fun finishPendingReplyWithCachedLocation() {
@@ -162,12 +183,15 @@ class RecoveryService : Service() {
         handler.removeCallbacks(replyTimeout)
         val location = latest.get()
         if (location != null && location.hasAccuracy() && location.accuracy > 0f) {
-            SecureStore.saveReport(this, buildReport(location))
-            SecureStore.setSmsStatus(this, "SMS_REPLY: fresh fix timed out; sending latest cached location")
-            SmsReplySender.send(this, destination, buildReport(location))
+            val report = buildReport(location)
+            SecureStore.saveReport(this, report)
+            SecureStore.setSmsStatus(this, "SMS_REPLY: fresh fix timed out; queuing latest complete report")
+            SmsReplySender.send(this, destination, report)
         } else {
-            SecureStore.setSmsStatus(this, "SMS_LOCATION: no usable location fix after 15 seconds")
-            SmsReplySender.send(this, destination, "DEVICE LOCATION\nNo usable location fix available.")
+            val report = "DEVICE LOCATION\nNo usable location fix available."
+            SecureStore.saveReport(this, report)
+            SecureStore.setSmsStatus(this, "SMS_LOCATION: no usable location fix after timeout")
+            SmsReplySender.send(this, destination, report)
         }
     }
 
@@ -257,6 +281,6 @@ class RecoveryService : Service() {
 
     private fun createChannel() { if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Device recovery", NotificationManager.IMPORTANCE_LOW)) }
     private fun notification() = NotificationCompat.Builder(this, CHANNEL).setContentTitle("Find My Device").setContentText("Recovery engine active").setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build()
-    override fun onDestroy() { handler.removeCallbacks(replyTimeout); try { relayEngine?.stop() } catch (_: Exception) {}; try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
+    override fun onDestroy() { SecureStore.setServiceActive(this, false); handler.removeCallbacks(replyTimeout); try { unregisterReceiver(refreshReceiver) } catch (_: Exception) {}; try { relayEngine?.stop() } catch (_: Exception) {}; try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }
