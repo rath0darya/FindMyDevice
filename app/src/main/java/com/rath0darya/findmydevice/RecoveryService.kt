@@ -2,28 +2,21 @@ package com.rath0darya.findmydevice
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Context
-import android.content.Intent
+import android.app.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
+import android.content.*
 import android.content.pm.PackageManager
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
+import android.location.*
+import android.net.*
 import android.net.wifi.WifiManager
-import android.os.BatteryManager
-import android.os.Build
-import android.os.IBinder
-import android.provider.Settings
+import android.os.*
 import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
@@ -38,6 +31,8 @@ class RecoveryService : Service() {
 
     private lateinit var locationManager: LocationManager
     private val latest = AtomicReference<Location?>(null)
+    private val bleCount = AtomicInteger(0)
+    private val handler = Handler(Looper.getMainLooper())
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
             if (!location.hasAccuracy() || location.accuracy <= 0f) return
@@ -49,19 +44,24 @@ class RecoveryService : Service() {
         }
     }
 
+    private val bleCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) { bleCount.incrementAndGet() }
+        override fun onBatchScanResults(results: MutableList<ScanResult>) { bleCount.addAndGet(results.size) }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
         startForeground(NOTIFICATION_ID, notification())
         locationManager = getSystemService(LocationManager::class.java)
         requestLocation()
+        scanNearby()
         persistReport()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH) {
-            requestLocation()
-            persistReport()
+            requestLocation(); scanNearby(); persistReport()
         }
         return START_STICKY
     }
@@ -84,49 +84,58 @@ class RecoveryService : Service() {
         } catch (_: SecurityException) { }
     }
 
-    private fun hasLocationPermission(): Boolean =
+    @SuppressLint("MissingPermission")
+    private fun scanNearby() {
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) return
+        try {
+            val adapter = getSystemService(BluetoothAdapter::class.java) ?: return
+            if (!adapter.isEnabled) return
+            bleCount.set(0)
+            adapter.bluetoothLeScanner?.startScan(bleCallback)
+            handler.postDelayed({ try { adapter.bluetoothLeScanner?.stopScan(bleCallback) } catch (_: Exception) {} ; persistReport() }, 8_000L)
+        } catch (_: Exception) { }
+    }
+
+    private fun hasLocationPermission() =
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
     private fun persistReport() {
         val loc = latest.get()
-        val report = if (loc != null) buildReport(loc) else "NO_LOCATION_FIX"
-        SecureStore.saveReport(this, report)
+        SecureStore.saveReport(this, if (loc != null) buildReport(loc) else "NO_LOCATION_FIX")
     }
 
     private fun buildReport(location: Location): String {
         val sources = mutableListOf<String>()
         if (location.provider.equals(LocationManager.GPS_PROVIDER, true)) sources += "GNSS"
         if (location.provider.equals(LocationManager.NETWORK_PROVIDER, true)) sources += "NETWORK/CELL"
-        val cellCount = cellCount()
-        val wifiCount = wifiCount()
-        val ble = "BLE" // BLE scan results are intentionally not used as a location oracle.
-        if (cellCount > 0) sources += "$cellCount CELLULAR_CELLS"
-        if (wifiCount > 0) sources += "$wifiCount WIFI_NETWORKS"
-        val confidence = confidence(location, cellCount, wifiCount)
+        val cells = cellCount()
+        val wifi = wifiCount()
+        val ble = bleCount.get()
+        if (cells > 0) sources += "$cells CELLULAR_CELLS"
+        if (wifi > 0) sources += "$wifi WIFI_NETWORKS"
+        if (ble > 0) sources += "$ble BLE_OBSERVATIONS"
+        val score = confidence(location, cells, wifi, ble)
         val battery = getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-        val internet = hasInternet()
-        val wifiConnected = isWifiConnected()
-        val sim = simPresent()
         val time = SimpleDateFormat("dd-MMM-yyyy HH:mm:ss z", Locale.US).format(Date(location.time))
         val map = "https://www.google.com/maps?q=${location.latitude},${location.longitude}"
         return buildString {
             appendLine("DEVICE LOCATION")
             appendLine("Coordinates: %.6f, %.6f".format(Locale.US, location.latitude, location.longitude))
             appendLine("Accuracy: ±%.0f metres".format(Locale.US, location.accuracy))
-            appendLine("Confidence: $confidence% — ${confidenceLevel(confidence)}")
-            appendLine("Sources: ${if (sources.isEmpty()) "GNSS/NETWORK unavailable" else sources.joinToString(", ")}")
+            appendLine("Confidence: $score% — ${confidenceLevel(score)}")
+            appendLine("Sources: ${if (sources.isEmpty()) "NO SUPPORTING SOURCES" else sources.joinToString(", ")}")
             appendLine("Timestamp: $time")
             appendLine("Battery: ${max(0, battery)}%")
-            appendLine("Internet: ${if (internet) "AVAILABLE" else "OFFLINE"}")
-            appendLine("Wi-Fi: ${if (wifiConnected) "CONNECTED" else "NOT CONNECTED"}")
-            appendLine("SIM: ${if (sim) "DETECTED" else "NOT DETECTED"}")
+            appendLine("Internet: ${if (hasInternet()) "AVAILABLE" else "OFFLINE"}")
+            appendLine("Wi-Fi: ${if (isWifiConnected()) "CONNECTED" else "NOT CONNECTED"}")
+            appendLine("SIM: ${if (simPresent()) "DETECTED" else "NOT DETECTED"}")
             appendLine("Map: $map")
-            appendLine("Status: ${if (confidence >= 75) "LOCATION VERIFIED" else "LOCATION ESTIMATED"}")
+            appendLine("Status: ${if (score >= 75) "LOCATION VERIFIED" else "LOCATION ESTIMATED"}")
         }
     }
 
-    private fun confidence(location: Location, cells: Int, wifi: Int): Int {
+    private fun confidence(location: Location, cells: Int, wifi: Int, ble: Int): Int {
         var score = when {
             location.accuracy <= 10f -> 75
             location.accuracy <= 25f -> 65
@@ -137,6 +146,7 @@ class RecoveryService : Service() {
         }
         score += when { cells >= 3 -> 10; cells >= 1 -> 5; else -> 0 }
         score += when { wifi >= 4 -> 10; wifi >= 1 -> 5; else -> 0 }
+        score += when { ble >= 5 -> 5; ble >= 1 -> 2; else -> 0 }
         return score.coerceIn(0, 99)
     }
 
@@ -149,58 +159,27 @@ class RecoveryService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun cellCount(): Int = try {
+    private fun cellCount() = try {
         val tm = getSystemService(TelephonyManager::class.java)
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
-            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-            tm.allCellInfo?.size ?: 0
-        } else 0
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) tm.allCellInfo?.size ?: 0 else 0
     } catch (_: Exception) { 0 }
 
     @SuppressLint("MissingPermission")
-    private fun wifiCount(): Int = try {
-        val wm = applicationContext.getSystemService(WifiManager::class.java)
-        wm.scanResults?.size ?: 0
-    } catch (_: Exception) { 0 }
+    private fun wifiCount() = try { getSystemService(WifiManager::class.java).scanResults?.size ?: 0 } catch (_: Exception) { 0 }
 
     private fun hasInternet(): Boolean {
-        val cm = getSystemService(ConnectivityManager::class.java)
-        val n = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(n) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        val cm = getSystemService(ConnectivityManager::class.java); val n = cm.activeNetwork ?: return false
+        return cm.getNetworkCapabilities(n)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
     }
-
     private fun isWifiConnected(): Boolean {
-        val cm = getSystemService(ConnectivityManager::class.java)
-        val n = cm.activeNetwork ?: return false
+        val cm = getSystemService(ConnectivityManager::class.java); val n = cm.activeNetwork ?: return false
         return cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
     }
-
     @SuppressLint("MissingPermission")
-    private fun simPresent(): Boolean = try {
-        val tm = getSystemService(TelephonyManager::class.java)
-        tm.simState == TelephonyManager.SIM_STATE_READY
-    } catch (_: Exception) { false }
+    private fun simPresent() = try { getSystemService(TelephonyManager::class.java).simState == TelephonyManager.SIM_STATE_READY } catch (_: Exception) { false }
 
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT >= 26) {
-            getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL, "Device recovery", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-    }
-
-    private fun notification(): Notification = NotificationCompat.Builder(this, CHANNEL)
-        .setContentTitle("Find My Device")
-        .setContentText("Recovery engine active")
-        .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-        .setOngoing(true)
-        .build()
-
-    override fun onDestroy() {
-        try { locationManager.removeUpdates(listener) } catch (_: Exception) { }
-        super.onDestroy()
-    }
-
+    private fun createChannel() { if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Device recovery", NotificationManager.IMPORTANCE_LOW)) }
+    private fun notification() = NotificationCompat.Builder(this, CHANNEL).setContentTitle("Find My Device").setContentText("Recovery engine active").setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build()
+    override fun onDestroy() { try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }
