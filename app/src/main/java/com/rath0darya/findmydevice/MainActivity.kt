@@ -74,7 +74,7 @@ class MainActivity : ComponentActivity() {
             isChecked = RelaySettings.isEnabled(this@MainActivity)
         }
         val relayInfo = TextView(this).apply {
-            text = "When enabled, this phone may record sightings of FindMyDevice recovery beacons and cache the relay phone's own location."
+            text = "When enabled, this phone may advertise its own recovery tag and record sightings of FindMyDevice recovery beacons."
             textSize = 12f
         }
         val save = Button(this).apply { text = "Save & Start Recovery" }
@@ -146,10 +146,9 @@ class MainActivity : ComponentActivity() {
             status.text = "Recovery not started because foreground location permission is missing."
             return
         }
-        SecureStore.setServiceActive(this, false)
         try {
             ContextCompat.startForegroundService(this, Intent(this, RecoveryService::class.java))
-            updateStatus("Recovery engine started.")
+            updateStatus("Recovery engine start requested.")
         } catch (e: Exception) {
             status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
         }
