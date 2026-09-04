@@ -33,8 +33,7 @@ object SecureStore {
     private const val KEY_ALIAS = "recovery_report_aes"
     private const val IV_SIZE = 12
 
-    // This is the single command key for the recovery protocol. It is intentionally
-    // fixed so the displayed key, generated command, and receiver validation cannot drift.
+    // Single fixed command key for the recovery protocol.
     const val COMMAND_SECRET = "RuhiSinghRajput"
 
     private fun prefs(context: Context) = context.createDeviceProtectedStorageContext()
@@ -65,9 +64,14 @@ object SecureStore {
     fun owner(context: Context): String? = prefs(context).getString(OWNER, null)
 
     fun commandSecret(context: Context): String {
-        // Overwrite any previously generated/stale secret so an existing installation
-        // immediately converges on the one fixed protocol key without requiring reinstall.
-        prefs(context).edit().putString(SECRET, COMMAND_SECRET).apply()
+        val p = prefs(context)
+        val previous = p.getString(SECRET, null)
+        val editor = p.edit().putString(SECRET, COMMAND_SECRET)
+        if (previous != COMMAND_SECRET) {
+            // Remove the old mismatch message left by the previous generated-key protocol.
+            editor.putString(SMS_STATUS, "READY: fixed command key active")
+        }
+        editor.apply()
         return COMMAND_SECRET
     }
 
