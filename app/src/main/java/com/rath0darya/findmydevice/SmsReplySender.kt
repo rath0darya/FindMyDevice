@@ -21,7 +21,15 @@ object SmsReplySender {
     }
 
     fun retryPending(context: Context) {
-        if (SecureStore.pendingSms(context) == null) return
+        val pending = SecureStore.pendingSms(context) ?: return
+        val partCount = SecureStore.pendingSmsPartCount(context)
+        val success = SecureStore.pendingSmsSuccessCount(context)
+        val failures = SecureStore.pendingSmsFailureCount(context)
+
+        // Retry automatically only when nothing was sent, or every submitted part failed.
+        // If some parts succeeded and others failed, do not duplicate the successful parts.
+        if (success > 0 || (partCount > 0 && failures in 1 until partCount)) return
+        if (pending.second.isBlank()) return
         attemptPending(context)
     }
 
