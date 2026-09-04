@@ -43,7 +43,21 @@ class SmsCommandReceiver : BroadcastReceiver() {
             return
         }
 
-        SecureStore.setSmsStatus(context, "SMS_COMMAND: valid LOCATE command received; acquiring fresh location")
+        SecureStore.setSmsStatus(context, "SMS_COMMAND: authenticated LOCATE command received")
+        val refresh = Intent(RecoveryService.ACTION_REFRESH_SIGNAL)
+            .setPackage(context.packageName)
+            .putExtra(EXTRA_REPLY_TO, sender)
+
+        if (SecureStore.isServiceActive(context)) {
+            // The recovery FGS is already alive. Signal it directly instead of trying to
+            // launch a location FGS from this background SMS broadcast.
+            context.sendBroadcast(refresh)
+            SecureStore.setSmsStatus(context, "SMS_COMMAND: sent refresh request to active recovery service")
+            return
+        }
+
+        // If the service was killed, try to restore it. Android 12+ may reject a background
+        // FGS launch here, so the catch path deliberately retains the cached report.
         try {
             ContextCompat.startForegroundService(
                 context,
@@ -51,11 +65,12 @@ class SmsCommandReceiver : BroadcastReceiver() {
                     .setAction(RecoveryService.ACTION_REFRESH)
                     .putExtra(EXTRA_REPLY_TO, sender)
             )
+            SecureStore.setSmsStatus(context, "SMS_COMMAND: recovery service restart requested")
         } catch (e: Exception) {
-            Log.w(TAG, "Recovery refresh could not be started", e)
+            Log.w(TAG, "Recovery service could not be restarted from SMS", e)
             SecureStore.setSmsStatus(
                 context,
-                "SMS_COMMAND: valid; refresh service failed: ${e.javaClass.simpleName}"
+                "SMS_COMMAND: service unavailable in background (${e.javaClass.simpleName}); cached report retained"
             )
             val fallback = try { SecureStore.lastReport(context) } catch (_: Exception) { null }
                 ?: "DEVICE LOCATION\nNo location fix available yet."
