@@ -11,8 +11,8 @@ android {
         applicationId = "com.rath0darya.findmydevice"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
     }
 
     buildTypes {
@@ -40,4 +40,5 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
+    implementation("com.google.android.gms:play-services-location:21.4.0")
 }
