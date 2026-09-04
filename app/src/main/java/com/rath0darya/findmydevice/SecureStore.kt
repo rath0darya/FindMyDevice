@@ -32,8 +32,10 @@ object SecureStore {
     private const val PENDING_SMS_FAILURE_COUNT = "pending_sms_failure_count"
     private const val KEY_ALIAS = "recovery_report_aes"
     private const val IV_SIZE = 12
-    private const val COMMAND_SECRET_LENGTH = 32
-    private const val COMMAND_SECRET_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    // This is the single command key for the recovery protocol. It is intentionally
+    // fixed so the displayed key, generated command, and receiver validation cannot drift.
+    const val COMMAND_SECRET = "RuhiSinghRajput"
 
     private fun prefs(context: Context) = context.createDeviceProtectedStorageContext()
         .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -63,33 +65,11 @@ object SecureStore {
     fun owner(context: Context): String? = prefs(context).getString(OWNER, null)
 
     fun commandSecret(context: Context): String {
-        val p = prefs(context)
-        val existing = p.getString(SECRET, null)
-        if (existing != null && isValidCommandSecret(existing)) return existing
-
-        val random = SecureRandom()
-        val chars = CharArray(COMMAND_SECRET_LENGTH) {
-            COMMAND_SECRET_ALPHABET[random.nextInt(COMMAND_SECRET_ALPHABET.length)]
-        }
-        chars[0] = ('A'.code + random.nextInt(26)).toChar()
-        chars[1] = ('0'.code + random.nextInt(10)).toChar()
-        for (index in chars.lastIndex downTo 1) {
-            val swapIndex = random.nextInt(index + 1)
-            val swap = chars[index]
-            chars[index] = chars[swapIndex]
-            chars[swapIndex] = swap
-        }
-
-        val value = String(chars)
-        p.edit().putString(SECRET, value).apply()
-        return value
+        // Overwrite any previously generated/stale secret so an existing installation
+        // immediately converges on the one fixed protocol key without requiring reinstall.
+        prefs(context).edit().putString(SECRET, COMMAND_SECRET).apply()
+        return COMMAND_SECRET
     }
-
-    private fun isValidCommandSecret(value: String): Boolean =
-        value.length == COMMAND_SECRET_LENGTH &&
-            value.all { it in COMMAND_SECRET_ALPHABET } &&
-            value.any { it in 'A'..'Z' } &&
-            value.any { it in '0'..'9' }
 
     fun setSmsStatus(context: Context, status: String) =
         prefs(context).edit().putString(SMS_STATUS, status.take(1000)).apply()
