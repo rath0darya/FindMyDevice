@@ -59,21 +59,37 @@ object SecureStore {
     fun commandSecret(context: Context): String {
         val p = prefs(context)
         val existing = p.getString(SECRET, null)
-        if (existing != null && existing.length == COMMAND_SECRET_LENGTH &&
-            existing.all { it in COMMAND_SECRET_ALPHABET }
-        ) {
+        if (existing != null && isValidCommandSecret(existing)) {
             return existing
         }
 
-        val value = buildString(COMMAND_SECRET_LENGTH) {
-            val random = SecureRandom()
-            repeat(COMMAND_SECRET_LENGTH) {
-                append(COMMAND_SECRET_ALPHABET[random.nextInt(COMMAND_SECRET_ALPHABET.length)])
-            }
+        val random = SecureRandom()
+        val chars = CharArray(COMMAND_SECRET_LENGTH) {
+            COMMAND_SECRET_ALPHABET[random.nextInt(COMMAND_SECRET_ALPHABET.length)]
         }
+
+        // Guarantee that every generated secret contains both letters and numbers.
+        chars[0] = ('A'.code + random.nextInt(26)).toChar()
+        chars[1] = ('0'.code + random.nextInt(10)).toChar()
+
+        // Shuffle so the guaranteed character positions are not predictable.
+        for (index in chars.lastIndex downTo 1) {
+            val swapIndex = random.nextInt(index + 1)
+            val temp = chars[index]
+            chars[index] = chars[swapIndex]
+            chars[swapIndex] = temp
+        }
+
+        val value = String(chars)
         p.edit().putString(SECRET, value).apply()
         return value
     }
+
+    private fun isValidCommandSecret(value: String): Boolean =
+        value.length == COMMAND_SECRET_LENGTH &&
+            value.all { it in COMMAND_SECRET_ALPHABET } &&
+            value.any { it in 'A'..'Z' } &&
+            value.any { it in '0'..'9' }
 
     fun setSmsStatus(context: Context, status: String) =
         prefs(context).edit().putString(SMS_STATUS, status.take(1000)).apply()
