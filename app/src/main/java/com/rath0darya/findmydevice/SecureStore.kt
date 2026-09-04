@@ -74,9 +74,9 @@ object SecureStore {
         chars[1] = ('0'.code + random.nextInt(10)).toChar()
         for (index in chars.lastIndex downTo 1) {
             val swapIndex = random.nextInt(index + 1)
-            val temp = chars[index]
+            val swap = chars[index]
             chars[index] = chars[swapIndex]
-            chars[swapIndex] = temp
+            chars[swapIndex] = swap
         }
 
         val value = String(chars)
@@ -144,6 +144,12 @@ object SecureStore {
 
     fun setPendingSmsPartCount(context: Context, count: Int) =
         prefs(context).edit().putInt(PENDING_SMS_PART_COUNT, count).apply()
+
+    fun resetPendingSmsAttempt(context: Context) =
+        prefs(context).edit()
+            .putInt(PENDING_SMS_SUCCESS_COUNT, 0)
+            .putInt(PENDING_SMS_FAILURE_COUNT, 0)
+            .apply()
 
     fun incrementPendingSmsSuccess(context: Context): Int {
         val p = prefs(context)
