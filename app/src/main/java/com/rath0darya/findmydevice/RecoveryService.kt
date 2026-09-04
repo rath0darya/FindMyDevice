@@ -128,15 +128,16 @@ class RecoveryService : Service() {
         if (cells > 0) sources += "$cells CELLULAR_CELLS"
         if (wifi > 0) sources += "$wifi WIFI_NETWORKS"
         if (ble > 0) sources += "$ble BLE_OBSERVATIONS"
-        val score = confidence(location, cells, wifi, ble)
+
+        val fusion = LocationFusionEngine.evaluate(location, cells, wifi, ble)
         val battery = getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         val time = SimpleDateFormat("dd-MMM-yyyy HH:mm:ss z", Locale.US).format(Date(location.time))
         val map = "https://www.google.com/maps?q=${location.latitude},${location.longitude}"
         return buildString {
             appendLine("DEVICE LOCATION")
             appendLine("Coordinates: %.6f, %.6f".format(Locale.US, location.latitude, location.longitude))
-            appendLine("Accuracy: ±%.0f metres".format(Locale.US, location.accuracy))
-            appendLine("Confidence: $score% — ${confidenceLevel(score)}")
+            appendLine("Accuracy: ±%.0f metres".format(Locale.US, fusion.accuracyMeters))
+            appendLine("Confidence: ${fusion.confidence}% — ${fusion.level}")
             appendLine("Sources: ${if (sources.isEmpty()) "NO SUPPORTING SOURCES" else sources.joinToString(", ")}")
             appendLine("Timestamp: $time")
             appendLine("Battery: ${max(0, battery)}%")
@@ -145,31 +146,8 @@ class RecoveryService : Service() {
             appendLine("SIM: ${if (simPresent()) "DETECTED" else "NOT DETECTED"}")
             appendLine("Relay: ${if (RelaySettings.isEnabled(this@RecoveryService)) "OPTED IN" else "OFF"}")
             appendLine("Map: $map")
-            appendLine("Status: ${if (score >= 75) "LOCATION VERIFIED" else "LOCATION ESTIMATED"}")
+            appendLine("Status: ${if (fusion.verified) "LOCATION VERIFIED" else "LOCATION ESTIMATED"}")
         }
-    }
-
-    private fun confidence(location: Location, cells: Int, wifi: Int, ble: Int): Int {
-        var score = when {
-            location.accuracy <= 10f -> 75
-            location.accuracy <= 25f -> 65
-            location.accuracy <= 50f -> 55
-            location.accuracy <= 100f -> 45
-            location.accuracy <= 500f -> 30
-            else -> 15
-        }
-        score += when { cells >= 3 -> 10; cells >= 1 -> 5; else -> 0 }
-        score += when { wifi >= 4 -> 10; wifi >= 1 -> 5; else -> 0 }
-        score += when { ble >= 5 -> 5; ble >= 1 -> 2; else -> 0 }
-        return score.coerceIn(0, 99)
-    }
-
-    private fun confidenceLevel(score: Int) = when {
-        score >= 90 -> "VERY HIGH"
-        score >= 75 -> "HIGH"
-        score >= 50 -> "MEDIUM"
-        score >= 25 -> "LOW"
-        else -> "VERY LOW"
     }
 
     @SuppressLint("MissingPermission")
