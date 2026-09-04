@@ -38,6 +38,7 @@ class RecoveryService : Service() {
     private val bleCount = AtomicInteger(0)
     private val handler = Handler(Looper.getMainLooper())
     private var relayEngine: OfflineRelayEngine? = null
+    private var relayBeacon: OfflineBleRelay? = null
     private var pendingReplyTo: String? = null
     private var pendingReplyStartedAt = 0L
     private val replyTimeout = Runnable { finishPendingReplyWithCachedLocation() }
@@ -212,10 +213,14 @@ class RecoveryService : Service() {
         if (!RelaySettings.isEnabled(this)) {
             relayEngine?.stop()
             relayEngine = null
+            relayBeacon?.stopAdvertising()
+            relayBeacon = null
             return
         }
         if (relayEngine == null) relayEngine = OfflineRelayEngine(this)
         relayEngine?.start()
+        if (relayBeacon == null) relayBeacon = OfflineBleRelay(this)
+        relayBeacon?.advertise()
     }
 
     private fun hasLocationPermission() =
@@ -281,6 +286,6 @@ class RecoveryService : Service() {
 
     private fun createChannel() { if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, "Device recovery", NotificationManager.IMPORTANCE_LOW)) }
     private fun notification() = NotificationCompat.Builder(this, CHANNEL).setContentTitle("Find My Device").setContentText("Recovery engine active").setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build()
-    override fun onDestroy() { SecureStore.setServiceActive(this, false); handler.removeCallbacks(replyTimeout); try { unregisterReceiver(refreshReceiver) } catch (_: Exception) {}; try { relayEngine?.stop() } catch (_: Exception) {}; try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
+    override fun onDestroy() { SecureStore.setServiceActive(this, false); handler.removeCallbacks(replyTimeout); try { unregisterReceiver(refreshReceiver) } catch (_: Exception) {}; try { relayEngine?.stop() } catch (_: Exception) {}; try { relayBeacon?.stopAdvertising() } catch (_: Exception) {}; try { locationManager.removeUpdates(listener) } catch (_: Exception) {}; super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }
