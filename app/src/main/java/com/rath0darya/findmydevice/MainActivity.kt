@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 class MainActivity : ComponentActivity() {
     private lateinit var ownerInput: EditText
     private lateinit var status: TextView
+    private lateinit var last: TextView
     private val permissions = buildList {
         add(Manifest.permission.ACCESS_FINE_LOCATION)
         add(Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -51,7 +52,7 @@ class MainActivity : ComponentActivity() {
         val save = Button(this).apply { text = "Save & Start Recovery" }
         val secretView = TextView(this)
         status = TextView(this).apply { textSize = 14f }
-        val last = TextView(this)
+        last = TextView(this)
         layout.addView(title)
         layout.addView(ownerInput)
         layout.addView(relayOptIn)
@@ -64,30 +65,56 @@ class MainActivity : ComponentActivity() {
 
         ownerInput.setText(SecureStore.owner(this) ?: "")
         secretView.text = "Command secret: ${SecureStore.commandSecret(this)}\nKeep this secret."
-        last.text = SecureStore.lastReport(this) ?: "No location report cached yet."
+        last.text = safeLastReport()
         status.text = "Grant permissions, save the control number, then keep recovery enabled."
 
         save.setOnClickListener {
-            if (!allPermissionsGranted()) {
-                ActivityCompat.requestPermissions(this, permissions, 42)
-            }
             SecureStore.setOwner(this, ownerInput.text.toString())
             RelaySettings.setEnabled(this, relayOptIn.isChecked)
-            try {
-                ContextCompat.startForegroundService(this, Intent(this, RecoveryService::class.java))
-                status.text = if (relayOptIn.isChecked) {
-                    "Recovery engine started. Nearby relay participation is enabled."
-                } else {
-                    "Recovery engine started. Nearby relay participation is disabled."
-                }
-            } catch (e: Exception) {
-                status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
+            if (!allPermissionsGranted()) {
+                status.text = "Permission approval is required before recovery can start."
+                ActivityCompat.requestPermissions(this, permissions, REQUEST_PERMISSIONS)
+                return@setOnClickListener
             }
-            last.text = SecureStore.lastReport(this) ?: "Waiting for a location fix..."
+            startRecovery()
         }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_PERMISSIONS) return
+        if (allPermissionsGranted()) {
+            startRecovery()
+        } else {
+            status.text = "Recovery not started because required permissions were not granted."
+        }
+    }
+
+    private fun startRecovery() {
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, RecoveryService::class.java))
+            status.text = if (RelaySettings.isEnabled(this)) {
+                "Recovery engine started. Nearby relay participation is enabled."
+            } else {
+                "Recovery engine started. Nearby relay participation is disabled."
+            }
+        } catch (e: Exception) {
+            status.text = "Could not start recovery service: ${e.javaClass.simpleName}"
+        }
+        last.text = safeLastReport()
+    }
+
+    private fun safeLastReport(): String = try {
+        SecureStore.lastReport(this) ?: "No location report cached yet."
+    } catch (_: Exception) {
+        "No readable location report cached yet."
     }
 
     private fun allPermissionsGranted() = permissions.all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    companion object {
+        private const val REQUEST_PERMISSIONS = 42
     }
 }
