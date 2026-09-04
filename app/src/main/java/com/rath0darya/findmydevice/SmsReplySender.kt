@@ -6,87 +6,122 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.telephony.ServiceState
 import android.telephony.SmsManager
 import android.telephony.SubscriptionManager
 import androidx.core.content.ContextCompat
 
 object SmsReplySender {
     private const val ACTION_SMS_SENT = "com.rath0darya.findmydevice.SMS_SENT"
+    private const val REQUEST_BASE = 2000
 
     fun send(context: Context, destination: String, message: String) {
+        SecureStore.savePendingSms(context, destination, message)
+        attemptPending(context)
+    }
+
+    fun retryPending(context: Context) {
+        if (SecureStore.pendingSms(context) == null) return
+        attemptPending(context)
+    }
+
+    private fun attemptPending(context: Context) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            SecureStore.setSmsStatus(context, "SMS_REPLY: SEND_SMS permission is NOT granted")
+            SecureStore.setSmsStatus(context, "SMS_QUEUE: SEND_SMS permission is NOT granted; report retained")
             return
         }
 
+        val pending = SecureStore.pendingSms(context) ?: return
+        val destination = pending.first
+        val message = pending.second
+        val subscriptionId = selectReadySubscriptionId(context)
+
+        if (subscriptionId == null) return
+
         try {
-            val smsManager = selectSmsManager(context) ?: run {
-                SecureStore.setSmsStatus(context, "SMS_REPLY: no active SMS subscription")
-                return
-            }
-            val parts = smsManager.divideMessage(message.take(1400))
+            val smsManager = SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+            val parts = smsManager.divideMessage(message)
             if (parts.isEmpty()) {
-                SecureStore.setSmsStatus(context, "SMS_REPLY: generated message has no parts")
+                SecureStore.setSmsStatus(context, "SMS_QUEUE: report produced no SMS parts")
                 return
             }
+
+            SecureStore.setPendingSmsPartCount(context, parts.size)
+            SecureStore.setSmsStatus(
+                context,
+                "SMS_REPLY: sending ${parts.size} part(s) via subscription $subscriptionId"
+            )
 
             val sentIntents = ArrayList<PendingIntent>(parts.size)
             parts.indices.forEach { index ->
                 sentIntents += PendingIntent.getBroadcast(
                     context,
-                    2000 + index,
+                    REQUEST_BASE + index,
                     Intent(ACTION_SMS_SENT)
                         .setPackage(context.packageName)
                         .putExtra("part_index", index)
-                        .putExtra("part_count", parts.size),
+                        .putExtra("part_count", parts.size)
+                        .putExtra("subscription_id", subscriptionId),
                     PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentImmutableFlag()
                 )
             }
 
-            SecureStore.setSmsStatus(
-                context,
-                "SMS_REPLY: submitting ${parts.size} part(s) via subscription ${subscriptionIdOf(smsManager)}"
-            )
             smsManager.sendMultipartTextMessage(destination, null, parts, sentIntents, null)
         } catch (e: Exception) {
             SecureStore.setSmsStatus(
                 context,
-                "SMS_REPLY: submit threw ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                "SMS_QUEUE: submit failed on subscription $subscriptionId: ${e.javaClass.simpleName}; report retained"
             )
         }
     }
 
-    private fun selectSmsManager(context: Context): SmsManager? {
-        if (Build.VERSION.SDK_INT < 22) {
-            @Suppress("DEPRECATION")
-            return SmsManager.getDefault()
+    private fun selectReadySubscriptionId(context: Context): Int? {
+        val manager = context.getSystemService(SubscriptionManager::class.java) ?: run {
+            SecureStore.setSmsStatus(context, "SMS_QUEUE: subscription manager unavailable; report retained")
+            return null
         }
 
-        val subscriptionId = try {
-            val defaultId = SubscriptionManager.getDefaultSmsSubscriptionId()
-            if (SubscriptionManager.isValidSubscriptionId(defaultId)) {
-                defaultId
-            } else {
-                val manager = context.getSystemService(SubscriptionManager::class.java)
-                manager?.activeSubscriptionInfoList?.firstOrNull()?.subscriptionId
-                    ?: SubscriptionManager.INVALID_SUBSCRIPTION_ID
-            }
+        val active = try {
+            manager.activeSubscriptionInfoList
+        } catch (_: SecurityException) {
+            SecureStore.setSmsStatus(context, "SMS_QUEUE: READ_PHONE_STATE unavailable; report retained")
+            return null
         } catch (_: Exception) {
-            SubscriptionManager.INVALID_SUBSCRIPTION_ID
+            SecureStore.setSmsStatus(context, "SMS_QUEUE: could not read SIM subscriptions; report retained")
+            return null
         }
 
-        if (SubscriptionManager.isValidSubscriptionId(subscriptionId)) {
-            return SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+        if (active.isEmpty()) {
+            SecureStore.setSmsStatus(context, "SMS_QUEUE: no active SIM/eSIM subscription; report retained")
+            return null
         }
 
-        @Suppress("DEPRECATION")
-        return SmsManager.getDefault()
-    }
+        val defaultId = SubscriptionManager.getDefaultSmsSubscriptionId()
+        val ordered = active.sortedBy { if (it.subscriptionId == defaultId) 0 else 1 }
+        var sawService = false
 
-    private fun subscriptionIdOf(manager: SmsManager): Int = try {
-        if (Build.VERSION.SDK_INT >= 31) manager.subscriptionId else -1
-    } catch (_: Exception) {
-        -1
+        for (info in ordered) {
+            val state = try {
+                val tm = context.getSystemService(android.telephony.TelephonyManager::class.java)
+                    ?.createForSubscriptionId(info.subscriptionId)
+                tm?.serviceState?.state
+            } catch (_: Exception) {
+                null
+            }
+
+            if (state == null || state == ServiceState.STATE_IN_SERVICE) {
+                sawService = true
+                return info.subscriptionId
+            }
+        }
+
+        if (!sawService) {
+            SecureStore.setSmsStatus(
+                context,
+                "SMS_QUEUE: SIM present but no cellular service; report retained for retry"
+            )
+        }
+        return null
     }
 
     private fun pendingIntentImmutableFlag(): Int =
