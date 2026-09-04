@@ -34,9 +34,7 @@ object SmsReplySender {
         val pending = SecureStore.pendingSms(context) ?: return
         val destination = pending.first
         val message = pending.second
-        val subscriptionId = selectReadySubscriptionId(context)
-
-        if (subscriptionId == null) return
+        val subscriptionId = selectReadySubscriptionId(context) ?: return
 
         try {
             val smsManager = SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
@@ -46,6 +44,7 @@ object SmsReplySender {
                 return
             }
 
+            SecureStore.resetPendingSmsAttempt(context)
             SecureStore.setPendingSmsPartCount(context, parts.size)
             SecureStore.setSmsStatus(
                 context,
@@ -98,29 +97,25 @@ object SmsReplySender {
 
         val defaultId = SubscriptionManager.getDefaultSmsSubscriptionId()
         val ordered = active.sortedBy { if (it.subscriptionId == defaultId) 0 else 1 }
-        var sawService = false
 
         for (info in ordered) {
             val state = try {
-                val tm = context.getSystemService(android.telephony.TelephonyManager::class.java)
+                context.getSystemService(android.telephony.TelephonyManager::class.java)
                     ?.createForSubscriptionId(info.subscriptionId)
-                tm?.serviceState?.state
+                    ?.serviceState?.state
             } catch (_: Exception) {
                 null
             }
 
             if (state == null || state == ServiceState.STATE_IN_SERVICE) {
-                sawService = true
                 return info.subscriptionId
             }
         }
 
-        if (!sawService) {
-            SecureStore.setSmsStatus(
-                context,
-                "SMS_QUEUE: SIM present but no cellular service; report retained for retry"
-            )
-        }
+        SecureStore.setSmsStatus(
+            context,
+            "SMS_QUEUE: SIM present but no cellular service; report retained for retry"
+        )
         return null
     }
 
