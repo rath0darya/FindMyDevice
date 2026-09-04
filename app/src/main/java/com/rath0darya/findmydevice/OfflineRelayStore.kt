@@ -74,15 +74,19 @@ object OfflineRelayStore {
         return Base64.encodeToString(iv + ciphertext, Base64.NO_WRAP)
     }
 
-    private fun decodeTime(encoded: String): Long = try {
-        val encrypted = Base64.decode(encoded, Base64.NO_WRAP)
-        if (encrypted.size <= IV_SIZE) return 0L
-        val iv = encrypted.copyOfRange(0, IV_SIZE)
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-        val packet = cipher.doFinal(encrypted.copyOfRange(IV_SIZE, encrypted.size))
-        if (packet.size < 8) 0L else ByteBuffer.wrap(packet, 0, 8).long
-    } catch (_: Exception) { 0L }
+    private fun decodeTime(encoded: String): Long {
+        return try {
+            val encrypted = Base64.decode(encoded, Base64.NO_WRAP)
+            if (encrypted.size <= IV_SIZE) return 0L
+            val iv = encrypted.copyOfRange(0, IV_SIZE)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+            val packet = cipher.doFinal(encrypted.copyOfRange(IV_SIZE, encrypted.size))
+            if (packet.size < 8) 0L else ByteBuffer.wrap(packet, 0, 8).long
+        } catch (_: Exception) {
+            0L
+        }
+    }
 
     fun packet(timestamp: Long, payload: ByteArray): ByteArray =
         ByteBuffer.allocate(8 + payload.size).putLong(timestamp).put(payload).array()
