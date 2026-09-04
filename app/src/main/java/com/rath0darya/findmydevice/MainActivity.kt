@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -19,6 +21,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var status: TextView
     private lateinit var last: TextView
     private lateinit var smsStatus: TextView
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val refreshUi = object : Runnable {
+        override fun run() {
+            if (::smsStatus.isInitialized) {
+                smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this@MainActivity) ?: "No SMS command processed yet."}"
+                last.text = safeLastReport()
+            }
+            uiHandler.postDelayed(this, 1_000L)
+        }
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -106,9 +118,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::smsStatus.isInitialized) {
-            smsStatus.text = "SMS diagnostics: ${SecureStore.smsStatus(this) ?: "No SMS command processed yet."}"
-        }
+        uiHandler.removeCallbacks(refreshUi)
+        uiHandler.post(refreshUi)
+    }
+
+    override fun onPause() {
+        uiHandler.removeCallbacks(refreshUi)
+        super.onPause()
     }
 
     private fun startRecovery() {
